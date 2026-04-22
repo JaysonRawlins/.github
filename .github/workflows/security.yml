@@ -1,0 +1,28 @@
+name: security
+on:
+  workflow_call: {}
+jobs:
+  osv-scanner:
+    name: OSV Scanner
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+      - name: Install osv-scanner
+        run: |
+          go install github.com/google/osv-scanner/v2/cmd/osv-scanner@latest
+          echo "$HOME/go/bin" >> $GITHUB_PATH
+      - name: Scan all dependencies
+        run: |
+          osv-scanner scan --recursive --format json . > results.json || true
+          osv-scanner scan --recursive --format table .  || true
+      - name: Fail on critical vulnerabilities
+        run: |
+          criticals=$(jq '[.results[]?.packages[]?.groups[]? | select(.max_severity | length > 0) | select((.max_severity | tonumber) >= 9.0)] | length' results.json)
+          echo "Found $criticals critical (CVSS >= 9.0) vulnerability groups"
+          if [ "$criticals" -gt 0 ]; then
+            jq -r '[.results[]?.packages[]? | {pkg: .package.name, ver: .package.version, groups: [.groups[]? | select(.max_severity | length > 0) | select((.max_severity | tonumber) >= 9.0)]} | select(.groups | length > 0)] | .[] | "\(.pkg)@\(.ver) -- CVSS \(.groups[0].max_severity) -- \(.groups[0].ids[0])"' results.json | sort -u
+            exit 1
+          fi
